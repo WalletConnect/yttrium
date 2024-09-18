@@ -8,6 +8,7 @@ use crate::{
         },
     },
     config::Config,
+    entry_point::EntryPointAddress,
     smart_accounts::{
         nonce::get_nonce,
         safe::{
@@ -85,6 +86,7 @@ pub async fn send_transaction(
     address: Option<Address>,
     authorization_list: Option<Vec<Authorization>>,
     config: Config,
+    entry_point_address: Option<EntryPointAddress>,
 ) -> eyre::Result<String> {
     let bundler_base_url = config.endpoints.bundler.base_url;
     let paymaster_base_url = config.endpoints.paymaster.base_url;
@@ -100,7 +102,8 @@ pub async fn send_transaction(
 
     let chain_id = chain.id.eip155_chain_id();
 
-    let entry_point_address = entry_point_config.address();
+    let entry_point_address =
+        entry_point_address.unwrap_or(entry_point_config.address());
 
     let rpc_url = config.endpoints.rpc.base_url;
 
@@ -202,6 +205,7 @@ pub async fn send_transaction(
         &entry_point_address,
     )
     .await?;
+    println!("nonce: {}", nonce);
 
     let user_op = UserOperationV07 {
         sender: account_address,
@@ -366,7 +370,7 @@ pub async fn send_transaction(
 
     let erc7579_launchpad_address = true;
     let verifying_contract = if erc7579_launchpad_address && !deployed {
-        sponsored_user_op.sender
+        account_address
     } else {
         SAFE_4337_MODULE_ADDRESS
     };
@@ -438,13 +442,14 @@ pub async fn send_transaction(
 
 #[cfg(test)]
 mod tests {
-    use crate::chain::ChainId;
+    use crate::{chain::ChainId, smart_accounts::safe::EntryPoint};
 
     use super::*;
     use alloy::{
-        consensus::{SignableTransaction, TxEip7702},
+        consensus::{SignableTransaction, TxEip7702, TxEnvelope},
+        eips::eip2718::Decodable2718,
         network::{EthereumWallet, TransactionBuilder, TxSignerSync},
-        primitives::U64,
+        primitives::{address, U64},
         providers::{ext::AnvilApi, PendingTransactionConfig, ProviderBuilder},
         rpc::types::TransactionRequest,
     };
@@ -515,6 +520,7 @@ mod tests {
             None,
             None,
             config.clone(),
+            None,
         )
         .await?;
 
@@ -530,7 +536,8 @@ mod tests {
         }];
 
         let transaction_hash =
-            send_transaction(transaction, owner, None, None, config).await?;
+            send_transaction(transaction, owner, None, None, config, None)
+                .await?;
 
         println!("Transaction sent: {}", transaction_hash);
 
@@ -571,12 +578,21 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_send_transaction_7702() -> eyre::Result<()> {
         let config = Config::local();
         let provider = ReqwestProvider::<Ethereum>::new_http(
             config.endpoints.rpc.base_url.parse()?,
         );
+
+        // let entrypoint = EntryPointAddress::new(
+        //     *EntryPoint::deploy(provider.clone()).await.unwrap().address(),
+        // );
+        // let deploy = EntryPoint::deploy_builder(provider.clone());
+        // println!("{}", hex::encode(deploy.calldata()));
+        // let entrypoint = deploy.deploy().await?;
+        // println!("Entrypoint: {}", entrypoint);
+        // let entrypoint = EntryPointAddress::new(address!("e9E3Abd9F8e2dB64fA099e2c5C016FBfA82CC266"));
 
         let destination = LocalSigner::random();
         let balance = provider.get_balance(destination.address()).await?;
@@ -594,6 +610,9 @@ mod tests {
 
         let authority = LocalSigner::random();
         provider.anvil_set_balance(authority.address(), U256::MAX).await?;
+
+        // Workaround what appears to be a viem bug where a zero nonce is encoded with a leading zero which apparently isn't allowed
+        provider.anvil_set_nonce(authority.address(), Uint::from(1)).await?;
 
         let chain_id = ChainId::ETHEREUM_SEPOLIA.eip155_chain_id();
         let auth_7702 = alloy::rpc::types::Authorization {
@@ -628,9 +647,12 @@ mod tests {
             transaction,
             owner.clone(),
             Some(authority.address()),
+            // None,
             Some(authorization_list.clone()),
             // None,
             config.clone(),
+            // Some(entrypoint),
+            None,
         )
         .await?;
         println!("Transaction sent: {}", transaction_hash);
@@ -654,11 +676,13 @@ mod tests {
         let transaction_hash = send_transaction(
             transaction,
             owner,
-            Some(authority.address()),
-            // None,
+            // Some(authority.address()),
+            None,
             // Some(authorization_list.clone()),
             None,
             config,
+            // Some(entrypoint),
+            None,
         )
         .await?;
 
@@ -696,6 +720,7 @@ mod tests {
             None,
             None,
             config.clone(),
+            None,
         )
         .await?;
         println!("Transaction sent: {}", transaction_hash);
@@ -803,6 +828,7 @@ mod tests {
             Some(authority.address()),
             None,
             config,
+            None,
         )
         .await?;
 
@@ -817,4 +843,11 @@ mod tests {
     // TODO test/fix: if invalid call data (e.g. sending balance that you don't
     // have), the account will still be deployed but the transfer won't happen.
     // Why can't we detect this?
+
+    // #[test]
+    // fn test_decode_txn() {
+    //     let bytes = "04f9091783aa36a782041c843b9aca00843b9aca0883138ab9940000000071727de22e5e9d8baf0edac6f37da03280b90844765e827f0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000a0ee7a142d267c1f36714e4a8f75612f20a797200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000050755c98b390524269873b96b708699c2775602300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000028000000000000000000000000000051d780000000000000000000000000004e574000000000000000000000000000000000000000000000000000000000000febc0000000000000000000000003b9aca000000000000000000000000003b9aca080000000000000000000000000000000000000000000000000000000000000660000000000000000000000000000000000000000000000000000000000000074000000000000000000000000000000000000000000000000000000000000001384e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec671688f0b9000000000000000000000000ebe001b3d534b9b6e2500fb78e67a1a137f561ce0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000844fff40e12314bf6ec4bb4c313fc5688e5ed22b31ec06ab822189d0d8cc1b3578ef5c196800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003a4d9ed0e8f000000000000000000000000000000000000000000000000000000000000002000000000000000000000000041675c099f32341bf84bfc5382af534df5c7461a00000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000ebe001b3d534b9b6e2500fb78e67a1a137f561ce00000000000000000000000000000000000000000000000000000000000001400000000000000000000000003fdb5bc686e861480ef99a6e3faae03c0b9f32e200000000000000000000000000000000000000000000000000000000000002c000000000000000000000000000000000000000000000000000000000000002e000000000000000000000000000000000000000000000000000000000000000010000000000000000000000006a4ed7b006e4556d237f1c14920de7ae015cf664000000000000000000000000000000000000000000000000000000000000014415cca6380000000000000000000000003fdb5bc686e861480ef99a6e3faae03c0b9f32e200000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000064e9ae5c53010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b5c5c97885c67f7361abafd2b95067a5bbda60360800000000000000000000000000005033000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000068f82619bb1a8745da56328feae6a9247d74dfc0c910a9fda37ea24dc90d4fc46188777d5d9165db98f0c6fc73bea0c9ae4da9625d37051d1fd34c42423946661c0000000000000000000000000000000000000000000000000000000000000000000000000000000000004d0000000000000000000000000b9feb5ae8a4ebf8aec861f416a1e55aaabe800093be5810641abb87dce6782e377175d9c35b80d5f33766c4e76409517cc1eebe75fa4882b8832e0de3b994d31b00000000000000000000000000000000000000c0f85ff85d83aa36a794edb5ea1e3c1bfe2c79ef5e29ade159257f74bdfa0001a07e9de13c86f2980bf7c2eaecd33e5fd6f9fea173e429ffcd111d7561fb2d0655a01d931ed692de42b93617367fe6abcf0e8a6a20d7dc0abe64340302bad1d9d0bd01a051d90367faf545868f79b90c0b524db2e0f148b013b78fb9c329c3846829a924a0721e187701730c3c22b37ad4605c639127f7152c1e551783d0f1eefbbf27ee98";
+    //     let buf = hex::decode(bytes).unwrap();
+    //     TxEnvelope::decode_2718(&mut buf.as_slice()).unwrap();
+    // }
 }

@@ -7,6 +7,27 @@ use alloy::{
 };
 
 sol!(
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes initCode;
+        bytes callData;
+        bytes32 accountGasLimits;
+        uint256 preVerificationGas;
+        bytes32 gasFees;
+        bytes paymasterAndData;
+        bytes signature;
+    }
+);
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    EntryPoint,
+    "src/contracts/artifacts/contracts/core/EntryPoint.sol/EntryPoint.json"
+);
+
+sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
     SafeProxyFactory,
